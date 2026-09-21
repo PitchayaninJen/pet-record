@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>สมุดสุขภาพสัตว์เลี้ยง</title>
-  <link rel="apple-touch-icon" href="https://pitchayaninjen.github.io/pet-record/apple-touch-icon.png">
+<link rel="apple-touch-icon" href="https://pitchayaninjen.github.io/pet-record/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
@@ -315,8 +315,8 @@
   .appt-actions { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
   .cal-btn {
     border: 1px solid var(--gold); color: var(--gold-deep);
-    background: none; font-family: inherit; font-size: 12.5px; font-weight: 600;
-    padding: 7px 11px; border-radius: 100px; cursor: pointer;
+    background: none; font-family: inherit; font-size: 12px; font-weight: 600;
+    padding: 6px 10px; border-radius: 100px; cursor: pointer;
     white-space: nowrap; display: inline-block; text-decoration: none;
   }
   .cal-btn:disabled { opacity: 0.6; cursor: default; }
@@ -406,7 +406,7 @@ function loadLocalData() {
 
 let state = loadLocalData();
 
-// บันทึกลงเครื่องและส่งขึ้น Google Apps Script อัตโนมัติ
+// บันทึกขึ้น Google Apps Script อัตโนมัติ
 async function saveData() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify(state));
@@ -429,7 +429,7 @@ async function saveData() {
   }
 }
 
-// ดึงข้อมูลล่าสุดจาก Google Sheets เมื่อเปิดหน้าเว็บ
+// ดึงข้อมูลเมื่อเปิดแอป
 async function fetchCloudData() {
   updateCloudStatus('syncing', 'กำลังโหลดข้อมูล...');
   try {
@@ -449,6 +449,31 @@ async function fetchCloudData() {
   } catch (err) {
     console.error('cloud fetch error', err);
     updateCloudStatus('error', 'ออฟไลน์ (ใช้ข้อมูลเครื่อง)');
+  }
+}
+
+/* =========================================================
+   Direct Add to Groot Calendar via Google Apps Script
+========================================================= */
+async function addEventToGrootCalendar(appt) {
+  try {
+    await fetch(GOOGLE_SCRIPT_URL, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'add_event',
+        title: appt.title,
+        dateISO: appt.date,
+        time: appt.time || '',
+        location: appt.location || '',
+        details: appt.note || ''
+      })
+    });
+    return true;
+  } catch (err) {
+    console.error('Calendar add error', err);
+    return false;
   }
 }
 
@@ -511,40 +536,6 @@ function resizeImage(file, maxDim = 360, quality = 0.65) {
 
 function getPet(id) { return state.pets.find(p => p.id === id); }
 function selectedPet() { return getPet(state.selectedId); }
-
-/* =========================================================
-   Google Calendar link
-========================================================= */
-function gcalUrl({ title, dateISO, time, details, location }) {
-  const d = dateISO.replace(/-/g, '');
-  let datesParam;
-  if (time) {
-    const [hh, mm] = time.split(':');
-    const start = new Date(dateISO + 'T' + time + ':00');
-    const end = new Date(start.getTime() + 30 * 60000);
-    const fmt = (dt) => dt.getFullYear().toString() +
-      String(dt.getMonth() + 1).padStart(2, '0') +
-      String(dt.getDate()).padStart(2, '0') + 'T' +
-      String(dt.getHours()).padStart(2, '0') +
-      String(dt.getMinutes()).padStart(2, '0') + '00';
-    datesParam = fmt(start) + '/' + fmt(end);
-  } else {
-    const start = new Date(dateISO + 'T00:00:00');
-    const end = new Date(start.getTime() + 86400000);
-    const fmt2 = (dt) => dt.getFullYear().toString() +
-      String(dt.getMonth() + 1).padStart(2, '0') +
-      String(dt.getDate()).padStart(2, '0');
-    datesParam = fmt2(start) + '/' + fmt2(end);
-  }
-  const params = new URLSearchParams({
-    action: 'TEMPLATE',
-    text: title,
-    dates: datesParam,
-    details: details || '',
-    location: location || ''
-  });
-  return 'https://calendar.google.com/calendar/render?' + params.toString();
-}
 
 /* =========================================================
    Rendering: Pet strip
@@ -822,12 +813,25 @@ function bindVaxForm(pet) {
     if (file && file.size > 0) {
       try { photo = await resizeImage(file, 360, 0.65); } catch (err) { console.error(err); }
     }
+    const nextDue = fd.get('nextDue') || '';
     pet.vaccines = pet.vaccines || [];
     pet.vaccines.push({
       id: uid(), type: fd.get('type') || 'vaccine', name: fd.get('name'), dateGiven: fd.get('dateGiven'),
-      nextDue: fd.get('nextDue') || '', note: fd.get('note') || '', photo
+      nextDue: nextDue, note: fd.get('note') || '', photo
     });
     saveData(); renderAll(); showToast('บันทึกแล้ว');
+
+    // ถ้ามีกำหนดนัดหมายครั้งถัดไป ให้ส่งไปปฏิทิน Groot อัตโนมัติทันที
+    if (nextDue) {
+      addEventToGrootCalendar({
+        title: typeMeta(fd.get('type')).apptPrefix + fd.get('name') + ' (' + pet.name + ')',
+        date: nextDue,
+        time: '',
+        note: fd.get('note') || '',
+        location: ''
+      });
+      showToast('บันทึกและเพิ่มเข้าปฏิทิน Groot อัตโนมัติแล้ว');
+    }
   });
 }
 
@@ -864,7 +868,7 @@ function renderApptBlock(pet) {
           <div class="s">${fmtDateTH(a.date)}${a.time ? ' · ' + a.time + ' น.' : ''}${a.location ? ' · ' + escapeHtml(a.location) : ''}</div>
         </div>
         <div class="appt-actions">
-          <button class="cal-btn" data-cal-link="${a.id}">+ เพิ่มลง Google Calendar</button>
+          <button class="cal-btn" data-cal-appt="${a.id}">+ เพิ่มเข้า Groot</button>
           ${a.source === 'custom' ? `<button class="del-btn" data-del-appt="${a.id}" style="padding:0;">ลบ</button>` : ''}
         </div>
       </div>`;
@@ -877,12 +881,28 @@ function renderApptBlock(pet) {
     if (wrap.innerHTML) bindApptForm(pet);
   });
 
-  block.querySelectorAll('[data-cal-link]').forEach(btn => {
-    const appt = all.find(x => x.id === btn.dataset.calLink);
+  block.querySelectorAll('[data-cal-appt]').forEach(btn => {
+    const appt = all.find(x => x.id === btn.dataset.calAppt);
     if (!appt) return;
-    btn.addEventListener('click', () => {
-      const url = gcalUrl({ title: appt.title, dateISO: appt.date, time: appt.time || '', details: appt.note || '', location: appt.location || '' });
-      window.open(url, '_blank');
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'กำลังเพิ่ม...';
+      const ok = await addEventToGrootCalendar({
+        title: appt.title + ' (' + pet.name + ')',
+        date: appt.date,
+        time: appt.time || '',
+        location: appt.location || '',
+        note: appt.note || ''
+      });
+      if (ok) {
+        btn.textContent = '✓ เพิ่มใน Groot แล้ว';
+        btn.classList.add('added');
+        showToast('เพิ่มเข้าปฏิทิน Groot สำเร็จ');
+      } else {
+        btn.disabled = false;
+        btn.textContent = '+ เพิ่มเข้า Groot';
+        showToast('เพิ่มไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+      }
     });
   });
 
@@ -904,20 +924,36 @@ function apptFormHtml() {
       </div>
       <div><label>สถานที่</label><input type="text" name="location" placeholder="ชื่อคลินิก/โรงพยาบาลสัตว์"></div>
       <div><label>บันทึกเพิ่มเติม</label><input type="text" name="note"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+        <input type="checkbox" id="autoCalCheck" name="autoCal" checked style="width:auto;margin:0;">
+        <label for="autoCalCheck" style="margin:0;cursor:pointer;font-size:13px;color:var(--ink);">เพิ่มลง Google Calendar (Groot) อัตโนมัติ</label>
+      </div>
       <div class="form-actions"><button type="submit" class="btn btn-primary">บันทึก</button></div>
     </form>`;
 }
 
 function bindApptForm(pet) {
-  document.getElementById('apptForm').addEventListener('submit', (e) => {
+  document.getElementById('apptForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    pet.appointments = pet.appointments || [];
-    pet.appointments.push({
+    const newAppt = {
       id: uid(), title: fd.get('title'), date: fd.get('date'),
       time: fd.get('time') || '', location: fd.get('location') || '', note: fd.get('note') || ''
-    });
+    };
+    pet.appointments = pet.appointments || [];
+    pet.appointments.push(newAppt);
     saveData(); renderAll(); showToast('เพิ่มนัดหมายแล้ว');
+
+    if (fd.get('autoCal')) {
+      addEventToGrootCalendar({
+        title: newAppt.title + ' (' + pet.name + ')',
+        date: newAppt.date,
+        time: newAppt.time,
+        location: newAppt.location,
+        note: newAppt.note
+      });
+      showToast('เพิ่มนัดหมายลงปฏิทิน Groot อัตโนมัติแล้ว');
+    }
   });
 }
 
@@ -1003,7 +1039,7 @@ function openEditPetSheet(petId) {
     pet.dob = fd.get('dob') || '';
     const file = fd.get('photo');
     if (file && file.size > 0) {
-      try { photo = await resizeImage(file, 300, 0.65); } catch (err) { console.error(err); }
+      try { pet.photo = await resizeImage(file, 300, 0.65); } catch (err) { console.error(err); }
     }
     saveData(); closeSheet(); renderAll(); showToast('บันทึกการแก้ไขแล้ว');
   });
@@ -1055,7 +1091,7 @@ function importData(e) {
 ========================================================= */
 if (!state.selectedId && state.pets.length) state.selectedId = state.pets[0].id;
 renderAll();
-fetchCloudData(); // ดึงข้อมูลจาก Google Sheets ทันทีที่เปิดแอป
+fetchCloudData();
 </script>
 </body>
 </html>
